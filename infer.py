@@ -11,7 +11,8 @@ import logging
 
 import numpy as np
 #from six.moves import range  # pylint: disable=redefined-builtin
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 import os
 import shutil
 import hashlib
