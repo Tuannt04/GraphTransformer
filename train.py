@@ -12,6 +12,7 @@ import logging
 import numpy as np
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
+
 import os
 import shutil
 import hashlib
@@ -26,6 +27,17 @@ from model import GraphTransformer
 import json
 
 from tensorflow.python import pywrap_tensorflow
+
+# TỰ ĐỊNH NGHĨA CLASS HPARAMS THAY THẾ CHO TF.CONTRIB
+class HParams:
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    def add_hparam(self, name, value):
+        setattr(self, name, value)
+    def set_hparam(self, name, value):
+        setattr(self, name, value)
+
 FLAGS = None
 
 def add_arguments(parser):
@@ -61,9 +73,9 @@ def add_arguments(parser):
     parser.add_argument("--max_src_len", type=int, default=100, help="Max length src")
     parser.add_argument("--max_tgt_len", type=int, default=100, help="Max length tgt")
     parser.add_argument("--dropout_rate", type=float, default=0.2, help="Dropout rate")
-    parser.add_argument("--use_copy", type=int, default=True, help="Whether use copy mechanism")
-    parser.add_argument("--use_depth", type=int, default=False, help="Whether use depth embedding")
-    parser.add_argument("--use_charlstm", type=int, default=False, help="Whether use character embedding")
+    parser.add_argument("--use_copy", type=int, default=1, help="Whether use copy mechanism")
+    parser.add_argument("--use_depth", type=int, default=0, help="Whether use depth embedding")
+    parser.add_argument("--use_charlstm", type=int, default=0, help="Whether use character embedding")
     parser.add_argument("--input_keep_prob", type=float, default=1.0, help="Dropout input keep prob")
     parser.add_argument("--output_keep_prob", type=float, default=0.9, help="Dropout output keep prob")
     parser.add_argument("--epoch_num", type=int, default=100, help="Number of epoch")
@@ -71,7 +83,7 @@ def add_arguments(parser):
     parser.add_argument("--lambda2", type=float, default=0.5)
 
 def create_hparams(flags):
-    return tf.contrib.training.HParams(
+    return HParams(
         data_dir=flags.data_dir,
         train_dir=flags.train_dir,
         output_dir=flags.output_dir,
@@ -128,13 +140,13 @@ class InferModel(collections.namedtuple("InferModel", ("graph", "model"))): pass
 def create_model(hparams, model, length=22):
     train_graph = tf.Graph()
     with train_graph.as_default():
-        train_model = model(hparams, tf.contrib.learn.ModeKeys.TRAIN)
+        train_model = model(hparams, "train")
     eval_graph = tf.Graph()
     with eval_graph.as_default():
-        eval_model = model(hparams, tf.contrib.learn.ModeKeys.EVAL)
+        eval_model = model(hparams, "eval")
     infer_graph = tf.Graph()
     with infer_graph.as_default():
-        infer_model = model(hparams, tf.contrib.learn.ModeKeys.INFER)
+        infer_model = model(hparams, "infer")
     return TrainModel(graph=train_graph, model=train_model), EvalModel(graph=eval_graph, model=eval_model), InferModel(graph=infer_graph, model=infer_model)
 
 def read_data_graph(src_path, edge_path, ref_path, wvocab, evocab, cvocab, hparams):
@@ -170,13 +182,10 @@ def read_data_graph(src_path, edge_path, ref_path, wvocab, evocab, cvocab, hpara
             edges_list = []
             depth = []
             
-            # Process nodes
             for w in src_seq:
                 if not w: continue
-                # Char IDs (Dung mapping cvocab hoac mac dinh 76)
                 char_id = [cvocab.get(c, 76) for c in w]
                 char_ids.append(char_id)
-                # Word IDs
                 src_ids.append(wvocab.get(w, data_utils.UNK_ID))
                 unk.append(w)
                 depth.append([])
@@ -184,11 +193,9 @@ def read_data_graph(src_path, edge_path, ref_path, wvocab, evocab, cvocab, hpara
             node_count = len(src_ids)
             if depth: depth[0].append(0)
 
-            # Process target
             for w in tgt:
                 tgt_ids.append(wvocab.get(w, data_utils.UNK_ID))
 
-            # Process edges
             dicc = {}
             for l_node in graph:
                 id1 = int(l_node)
@@ -227,7 +234,6 @@ def read_data_graph(src_path, edge_path, ref_path, wvocab, evocab, cvocab, hpara
     return data_set, unks
 
 def train(hparams):
-    # Tu dong build vocab neu rong (Tuong thich Python 3.5 format)
     wvocab, _ = data_utils.initialize_vocabulary(hparams.from_vocab, os.path.join(hparams.data_dir, "train.src"))
     evocab, _ = data_utils.initialize_vocabulary(hparams.label_vocab, os.path.join(hparams.data_dir, "train.tgt"))
     cvocab, _ = data_utils.initialize_vocabulary("data/cvocab", os.path.join(hparams.data_dir, "train.src"))
@@ -245,10 +251,6 @@ def train(hparams):
     train_data, _ = read_data_graph(os.path.join(hparams.data_dir, "train.src"), 
                                     os.path.join(hparams.data_dir, "train.edge"),
                                     os.path.join(hparams.data_dir, "train.tgt"),
-                                    wvocab, evocab, cvocab, hparams)
-    valid_data, _ = read_data_graph(os.path.join(hparams.data_dir, "valid.src"), 
-                                    os.path.join(hparams.data_dir, "valid.edge"),
-                                    os.path.join(hparams.data_dir, "valid.tgt"),
                                     wvocab, evocab, cvocab, hparams)
 
     ckpt = tf.train.get_checkpoint_state(hparams.train_dir)
@@ -274,38 +276,27 @@ def train(hparams):
         step_loss, global_step, predict_count = train_model.model.train_step(train_sess, train_data, no_random=True, id=now_step * hparams.batch_size)
         
         now_step += 1
-        # Khi kết thúc 1 Epoch
         if now_step >= epoch_step:
             epoch_count += 1
             now_step = 0
             random.shuffle(train_data)
-            # In ra tiến độ sau mỗi vòng lặp để bạn biết nó đang chạy đến đâu
             print("--- Kết thúc Epoch {0}/{1} | Global Step: {2} ---".format(epoch_count, hparams.epoch_num, global_step))
         
         total_loss += step_loss
         total_time += (time.time() - start_time)
         
-        # In chi tiết Loss sau mỗi 100 bước
         if global_step % 10 == 0:
-            avg_loss = total_loss / 100
-            avg_time = total_time / 100
+            avg_loss = total_loss / 10
+            avg_time = total_time / 10
             print(">> [Báo cáo] Step {0} | Loss trung bình: {1:.4f} | Time: {2:.2f}s".format(global_step, avg_loss, avg_time))
             total_loss, total_time = 0.0, 0.0
             
-        if now_step == 0:
+        if global_step % 1000 == 0:
             train_model.model.saver.save(train_sess, ckpt_path, global_step=global_step)
             print(">> Đã lưu mô hình (checkpoint) tại step {0}".format(global_step))
 
 def init_embedding(hparams, vocab):
     emb = np.random.uniform(-0.05, 0.05, (len(vocab), hparams.emb_dim)).astype(np.float32)
-    if os.path.exists("data/amr_vector.txt"):
-        try:
-            word_vectors = KeyedVectors.load_word2vec_format("data/amr_vector.txt")
-            for word, idx in vocab.items():
-                if word in word_vectors:
-                    emb[idx] = word_vectors[word]
-        except:
-            print("Load amr_vector failed, using random initialization.")
     return emb
 
 if __name__ == "__main__":
