@@ -29,12 +29,12 @@ class GraphTransformer():
         self.flag = True
         self.mode = mode
         self.batch_size = hparams.batch_size
-        if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+        if self.mode == "train":
             self.is_training = True
         else:
             self.is_training = False
 
-        if self.mode != tf.contrib.learn.ModeKeys.INFER:
+        if self.mode != "infer":
             self.enc_seq_ids = tf.placeholder(tf.int32, [None, self.max_src_length])
             self.enc_seq_lens = tf.placeholder(tf.int32, [None])
             self.enc_seq_masks = tf.placeholder(tf.int32, [None, None, None])
@@ -77,7 +77,7 @@ class GraphTransformer():
             self.dec_lens = tf.placeholder(tf.int32, [None])
             self.dec_masks = tf.placeholder(tf.int32, [None, None, None])
 
-        if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+        if self.mode == "train":
             self.input_keep_prob = 1 - self.dropout_rate
             self.output_keep_prob = 1.0
         else:
@@ -338,7 +338,7 @@ class GraphTransformer():
             self.sample_id = tf.argmax(self.probs, axis=2)
             self.top_k_value, self.top_k_indice = tf.nn.top_k(self.probs, k=2)
 
-        if self.mode != tf.contrib.learn.ModeKeys.INFER:
+        if self.mode != "infer":
             with tf.variable_scope("loss") as scope:
                 crossent = tf.reduce_sum(-tf.log(self.probs) * (
                     tf.one_hot(self.targets, self.wvocab_size) * 0.9 + 0.1 / self.wvocab_size),
@@ -366,7 +366,7 @@ class GraphTransformer():
                 self.loss = (tf.reduce_sum(crossent * self.weights)) / self.batch_size
 
 
-        if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+        if self.mode == "train":
             with tf.variable_scope("train_op") as scope:
                 self.global_step = tf.Variable(0, trainable=False)
                 self.lr = noam_scheme(np.power(self.num_units, -0.5) * 0.35, self.global_step, 6000)
